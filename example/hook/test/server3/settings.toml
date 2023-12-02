@@ -1,0 +1,34 @@
+timeout_min = 150
+timeout_max = 300
+# Min and max value in milisecond of the election timeout. Timeout is randomly choosen between these two values
+
+max_timeout_value = 300
+# Maximum value in millisecond of the heartbeat timeout if you're a potential candidate
+min_inc_timeout = 150
+# Min and max value in millisecond of the random incrementation of ou timeout each time we received a new term.
+
+prepare_term_period = 80
+# Value in milisecond that separe term preparations, default 80
+# If this time is too short to finish the term preparation, an empty heartbeat
+# will be send and the content will be used for the next term. The hook doesn't
+# implement any problem management if you fail multiple times to send a term.
+# You can manage it yourself with the `send-term` script
+node_id="server3"
+
+nodes = ['255.255.255.250:8080', '255.255.255.251:8080', '255.255.255.253:8080', '255.255.255.254:8080']
+# Optional list of public known nodes in a network. If this list appear to be empty, the node won't connect to anything and will be the current leader of his own network.
+
+# todo followers = ['15.126.208.72']
+# Optional list of known followers
+
+addr = "0.0.0.0"
+# Server local address, default "127.0.0.1"
+port = "8080"
+# Port used between nodes to communicate, default "3000"
+
+follower = false
+# If true, the current node will never ask for an election and will never be able to vote. Nevertheless you will receive all heartbeat and all information like a normal node. Some hooks will never be called obviously but you are a part of the network. If false, you will be considered as a potential candidate after a successfull bootstrap and will be able to vote.
+# default true
+
+response_timeout = 200
+# Value in millisecond before considering that a node will never respond

@@ -1,0 +1,13 @@
+#! /bin/bash
+
+i=$1
+output="["
+while test $i -lt $2
+do
+	output="${output}{'id':${i},'content':'`cat term_$i`'},"
+	i=$(($i+1))
+done
+
+output="${output}{'id':$2,'content':'`cat term_$i`'}]"
+
+echo -n $output

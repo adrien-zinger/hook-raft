@@ -3,16 +3,19 @@
 //!       as a library)
 
 use super::hook_trait::Hook;
-use crate::log_entry::Term;
+use crate::{log_entry::Term, state::EStatus};
+use chrono::{SecondsFormat, Utc};
+use serde::Deserialize;
 use std::{env, fs, process::Command};
+use tracing::{debug, warn};
 
-pub(crate) struct DefaultHook;
+pub struct DefaultHook;
 impl Hook for DefaultHook {
     fn update_node(&self) -> bool {
         update_node()
     }
 
-    fn pre_append_term(&self, _term: &Term) -> bool {
+    fn pre_append_term(&self, _term: &Term) -> Option<usize> {
         pre_append_term(_term)
     }
 
@@ -27,82 +30,201 @@ impl Hook for DefaultHook {
     fn prepare_term(&self) -> String {
         prepare_term()
     }
+
+    fn retreive_term(&self, index: usize) -> Option<Term> {
+        retreive_term(index)
+    }
+
+    fn retreive_terms(&self, from: usize, to: usize) -> Option<Vec<Term>> {
+        retreive_terms(from, to)
+    }
+
+    fn switch_status(&self, status: EStatus) {
+        switch_status(status)
+    }
 }
 
 fn get_script_path(prefix: &'static str) -> Option<String> {
     let current_dir = match env::current_dir() {
         Ok(dir) => dir,
-        _ => return None,
+        _ => {
+            debug!("no {prefix} found script");
+            return None;
+        }
     };
     for entry in fs::read_dir(current_dir).unwrap().flatten() {
-        let path = entry.path();
-        let path = path.to_str().unwrap();
-        if path.starts_with(prefix) && !path.ends_with(&".sample") {
-            return Some(path.to_string());
+        let name = entry.file_name();
+        let name = name.to_str().unwrap();
+        if name.starts_with(prefix) && !name.ends_with(&".sample") {
+            return Some(entry.path().to_str().unwrap().to_string());
         }
     }
+    debug!("no {prefix} found script");
     None
+}
+
+fn exec_cmd(script: String, input: Option<Vec<String>>) -> Option<String> {
+    let mut cmd = Command::new(script.clone());
+    debug!("exec script {} with args: {:?}", script, input);
+    if let Some(args) = input {
+        cmd.args(args);
+    }
+    let output = cmd.output().expect("failed reading output");
+    debug!("{}: {:#?}", script, output);
+    Some(String::from_utf8(output.stdout).unwrap().to_lowercase())
 }
 
 fn update_node() -> bool {
     match get_script_path("update_node") {
         Some(script) => {
-            let mut cmd = Command::new(script);
-            let output = cmd.spawn().unwrap().wait_with_output().unwrap();
-            let res = String::from_utf8(output.stdout).unwrap().to_lowercase();
-            res != "false"
+            if let Some(res) = exec_cmd(script, None) {
+                res == "true"
+            } else {
+                false
+            }
         }
         None => true,
     }
 }
 
-// todo, pass in arguments term and other flavours
-fn pre_append_term(_term: &Term) -> bool {
-    match get_script_path("pre_append_term") {
-        Some(script) => {
-            let mut cmd = Command::new(script);
-            let output = cmd.spawn().unwrap().wait_with_output().unwrap();
-            let res = String::from_utf8(output.stdout).unwrap().to_lowercase();
-            res != "false"
-        }
-        None => true,
+fn pre_append_term(term: &Term) -> Option<usize> {
+    let script = if let Some(script) = get_script_path("pre_append_term") {
+        script
+    } else {
+        return Some(term.id);
+    };
+    let res = exec_cmd(
+        script,
+        Some(vec![format!("{}", term.id), term.content.clone()]),
+    )?;
+    if res.is_empty() {
+        None
+    } else {
+        Some(res.parse().expect("Failed to parse pre_append_term output"))
     }
 }
 
-// todo, pass in arguments term and other flavours
-fn append_term(_term: &Term) -> bool {
+fn append_term(term: &Term) -> bool {
     match get_script_path("append_term") {
         Some(script) => {
-            let mut cmd = Command::new(script);
-            let output = cmd.spawn().unwrap().wait_with_output().unwrap();
-            let res = String::from_utf8(output.stdout).unwrap().to_lowercase();
-            res != "false"
+            if let Some(res) = exec_cmd(
+                script,
+                Some(vec![format!("{}", term.id), term.content.clone()]),
+            ) {
+                res == "true"
+            } else {
+                false
+            }
         }
         None => true,
     }
 }
 
-// todo, pass in arguments term and other flavours
-fn commit_term(_term: &Term) -> bool {
+fn commit_term(term: &Term) -> bool {
     match get_script_path("commit_term") {
         Some(script) => {
-            let mut cmd = Command::new(script);
-            let output = cmd.spawn().unwrap().wait_with_output().unwrap();
-            let res = String::from_utf8(output.stdout).unwrap().to_lowercase();
-            res != "false"
+            if let Some(res) = exec_cmd(
+                script,
+                Some(vec![format!("{}", term.id), term.content.clone()]),
+            ) {
+                res == "true"
+            } else {
+                false
+            }
         }
         None => true,
     }
 }
 
-// todo, pass in arguments term and other flavours
 fn prepare_term() -> String {
-    match get_script_path("prepare_term") {
-        Some(script) => {
-            let mut cmd = Command::new(script);
-            let output = cmd.spawn().unwrap().wait_with_output().unwrap();
-            String::from_utf8(output.stdout).unwrap().to_lowercase()
+    if let Some(script) = get_script_path("prepare_term") {
+        if let Some(output) = exec_cmd(script, None) {
+            return output;
         }
-        None => String::new(),
+    }
+    "default".into()
+}
+
+fn retreive_term(index: usize) -> Option<Term> {
+    debug!("call retrieve term script");
+    let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, false);
+    let script = if let Some(script) = get_script_path("retrieve_term") {
+        script
+    } else {
+        return Some(Term {
+            id: index,
+            timestamp,
+            content: "default".into(),
+        });
+    };
+    let content = exec_cmd(script, Some(vec![format!("{index}")]))?;
+    debug!("content retrieved {} {}", index, content);
+    Some(Term {
+        id: index,
+        timestamp,
+        content,
+    })
+}
+
+fn retreive_terms(from: usize, to: usize) -> Option<Vec<Term>> {
+    debug!("call retrieve termS script");
+    let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, false);
+    let script = get_script_path("retrieve_n_term");
+    if script.is_none() {
+        return Some(
+            (from..=to)
+                .map(|id| Term {
+                    id,
+                    timestamp: timestamp.clone(),
+                    content: "default".into(),
+                })
+                .collect(),
+        );
+    }
+
+    let output = exec_cmd(
+        script.unwrap(),
+        Some(vec![format!("{from}"), format!("{to}")]),
+    )?;
+
+    #[derive(Deserialize)]
+    struct TermWithoutTimestamp {
+        id: usize,
+        content: String,
+    }
+
+    match serde_json::from_str::<Vec<TermWithoutTimestamp>>(&output) {
+        Ok(terms) => {
+            debug!("parse retrieve termS succeed");
+            Some(
+                terms
+                    .into_iter()
+                    .map(|term| Term {
+                        id: term.id,
+                        timestamp: timestamp.clone(),
+                        content: term.content,
+                    })
+                    .collect(),
+            )
+        }
+        Err(err) => {
+            warn!("{:?} failed to parse retrieve termS output {}", err, output);
+            None
+        }
+    }
+}
+
+fn switch_status(status: EStatus) {
+    if let Some(script) = get_script_path("switch_status") {
+        exec_cmd(
+            script,
+            Some(vec![match status {
+                EStatus::ConnectionPending => "pending",
+                EStatus::Follower => "follower",
+                EStatus::Leader => "leader",
+                EStatus::Candidate => "candidate",
+            }
+            .to_string()]),
+        );
     }
 }

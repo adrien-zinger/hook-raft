@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::log_entry::{Entries, Term};
+use crate::log_entry::Term;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum HttpResult {
@@ -29,7 +29,8 @@ impl std::fmt::Display for HttpErrorResult {
 pub struct RequestVoteInput {
     pub candidate_id: String,
     pub term: Term,
-    pub last_term: Term,
+    // commit index
+    pub last_term: usize,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -43,7 +44,7 @@ pub struct AppendTermInput {
     pub term: Term,
     pub leader_id: String,
     pub prev_term: Term,
-    pub entries: Entries,
+    pub entries: Vec<Term>,
     pub leader_commit_index: usize,
 }
 
@@ -59,8 +60,6 @@ pub struct UpdateNodeInput {
     pub hash: [u8; 16],
     /// Open server port
     pub port: String,
-    /// Follower flag
-    pub follower: bool,
 }
 
 impl PartialEq for UpdateNodeInput {
@@ -72,6 +71,5 @@ impl PartialEq for UpdateNodeInput {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdateNodeResult {
     pub leader_id: String,
-    pub node_list: Vec<String>, // todo how is it with hashset here ?
-    pub follower_list: Vec<String>,
+    pub node_list: Vec<String>,
 }

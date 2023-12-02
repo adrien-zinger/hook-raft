@@ -13,7 +13,7 @@
 //! - if alone in the network, start to be a leader
 //!
 //! When the candidature process finish, if the node is still a candidate, wait
-//! a random time and restat a candidature.
+//! a random time and restart a candidature.
 //!
 //! If candidate is a leader at the end of the workflow, start the leader
 //! workflow. [crate::workflow::leader]
@@ -29,7 +29,7 @@ use crate::{
     node::Node,
     Settings,
 };
-use tracing::{trace, warn};
+use tracing::{debug, trace, warn};
 
 impl Node {
     /// - On conversion to candidate, start election:
@@ -42,47 +42,53 @@ impl Node {
     ///   follower
     /// - If election timeout elapses: start new election
     pub async fn run_candidate(&self) -> ErrorResult<()> {
-        let (last_term, term) = {
+        let (commit_index, mut last_term) = {
             let mut logs = self.logs.lock().await;
-            (logs.back().unwrap(), logs.append(String::new()))
+            let commit_index = logs.last_index(); // todo: wrong names
+            if let Some((_, id)) = &*self.vote_for.read().await {
+                if commit_index <= *id {
+                    return Ok(());
+                }
+            }
+            (commit_index, logs.append("candidature".into()))
         };
 
-        {
-            *self.p_current_term.lock().await = term.clone();
-            *self.vote_for.write().await = Some((
-                format!("{}:{}", self.settings.addr, self.settings.port),
-                last_term.clone(),
-            ));
-        }
+        self.next_indexes.write().await.clear();
+        self.hook.append_term(&last_term);
+        *self.vote_for.write().await = Some((self.settings.node_id.clone(), commit_index));
+
         while self
-            .start_candidature(last_term.clone(), term.clone())
+            .start_candidature(commit_index, last_term.clone())
             .await
-        {}
+        {
+            last_term = self.logs.lock().await.append("candidature".into());
+            self.hook.append_term(&last_term);
+            *self.vote_for.write().await = Some((self.settings.node_id.clone(), commit_index));
+        }
+
         Ok(())
     }
 
-    async fn start_candidature(
-        &self,
-        last_term: LogEntry,
-        term: LogEntry,
-    ) -> bool {
-        let res = self.async_calls_candidature(last_term, term).await;
+    async fn start_candidature(&self, commit_index: usize, last_term: LogEntry) -> bool {
+        let res = self.async_calls_candidature(commit_index, last_term).await;
+        // clean vote
+        *self.vote_for.write().await = None;
+
         trace!("candidature finished!");
         if res {
-            self.set_status_leader().await.unwrap();
+            self.switch_to_leader().await.unwrap();
+            return false;
+        }
+        if self.p_status.is_follower().await {
             return false;
         }
         let dur = self.settings.get_randomized_timeout();
-        let p_st = self.p_status.clone();
+        debug!("wait {:?} before a new timeout", dur);
         tokio::time::sleep(dur).await;
-        p_st._is_candidate().await && !res
+        self.p_status.is_candidate().await
     }
 
-    async fn async_calls_candidature(
-        &self,
-        last_term: LogEntry,
-        term: LogEntry,
-    ) -> bool {
+    async fn async_calls_candidature(&self, commit_index: usize, last_term: LogEntry) -> bool {
         let nodes = self.node_list.read().await.clone();
         if nodes.is_empty() {
             trace!("no other nodes, will turn into a leader by default");
@@ -91,19 +97,27 @@ impl Node {
         let len = nodes.len();
         let mut granted_vote_count = 0;
         for node in nodes {
+            if self.p_status.is_follower().await {
+                return false;
+            }
             // todo: manage all warning, (return an error and stop the node)
             call_candidature(
                 &node.into(),
                 &self.settings,
-                &term,
                 &last_term,
+                commit_index,
                 &mut granted_vote_count,
             )
             .await
         }
-        let r = granted_vote_count as f64 / len as f64;
-        trace!("candidature finished with score {}", r);
-        r >= 0.5 // todo: make that test in settings or in a hook
+
+        trace!("candidature finished with score {}", granted_vote_count);
+        if let Some((vote, _)) = &*self.vote_for.read().await {
+            if *vote == format!("{}:{}", self.settings.addr, self.settings.port) {
+                return granted_vote_count + 1 > (len / 2); // todo use quorum from settings
+            }
+        }
+        granted_vote_count > (len / 2) // todo use quorum from settings
     }
 }
 
@@ -111,8 +125,8 @@ impl Node {
 async fn call_candidature(
     target: &Url,
     settings: &Settings,
-    term: &LogEntry,
     last_term: &LogEntry,
+    commit_index: usize,
     granted_vote_count: &mut usize,
 ) {
     // todo: we may want in case of fail make a hook
@@ -120,14 +134,15 @@ async fn call_candidature(
         target,
         settings,
         RequestVoteInput {
-            candidate_id: format!("{}:{}", settings.addr, settings.port),
-            term: term.clone(),
-            last_term: last_term.clone(),
+            candidate_id: settings.node_id.clone(),
+            term: last_term.clone(),
+            last_term: commit_index,
         },
     )
     .await
     {
         Ok(res) => {
+            debug!("vote request response received {:#?}", res);
             if res.vote_granted {
                 *granted_vote_count += 1;
             }

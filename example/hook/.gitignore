@@ -1,0 +1,4 @@
+/target
+term_*
+*.log
+test/hook

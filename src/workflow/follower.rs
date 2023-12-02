@@ -2,14 +2,12 @@
 // This source code is licensed under the GPLv3 license, you can found the
 // LICENSE file in the root directory of this source tree.
 
-//! Implementation of the folower workflow, a follower start a heartbeat
+//! Implementation of the follower workflow, a follower start a heartbeat
 //! timeout if node's settings say it's not a pure follower (can be candidate)
 //! If the node is a follower follower, doesn't start any timeout.
 
 use crate::{common::error::ErrorResult, node::Node};
-use dyn_timeout::tokio_impl::DynTimeout;
-use tokio::sync::mpsc;
-use tracing::trace;
+use tracing::{debug, trace};
 
 impl Node {
     /// Start follower workflow
@@ -20,22 +18,39 @@ impl Node {
             tokio::select! { _ = tokio::signal::ctrl_c() => {} };
             Ok(())
         } else {
-            let (sender, mut receiver) = mpsc::channel::<()>(1);
-            let dur = self.settings.get_randomized_timeout();
-            let mut dyn_timeout = DynTimeout::with_sender(dur, sender);
-            dyn_timeout
-                .set_max_waiting_time(self.settings.get_max_timeout_value());
-            trace!("start timeout");
-            *self.opt_heartbeat.lock().await = Some(dyn_timeout);
-            tokio::select! {
-                _ = receiver.recv() => {
-                    trace!("heartbeat timeout!");
-                    *self.opt_heartbeat.lock().await = None;
-                    self.set_status_to_candidate().await?
-                }
-                _ = tokio::signal::ctrl_c() => {}
+            self.reset_timeout().await;
+            while self.p_status.is_follower().await {
+                self.p_status.wait();
             }
             Ok(())
         }
+    }
+
+    pub async fn reset_timeout(&self) {
+        let p_heartbeat = self.heartbeat.clone();
+        let p_status = self.p_status.clone();
+        let (send, mut recv) = tokio::sync::oneshot::channel::<()>();
+        let dur = self.settings.get_randomized_timeout();
+
+        let mut heartbeat = self.heartbeat.lock().await;
+        if heartbeat.is_some() {
+            // cancel previous heartbeat timeout by triggering
+            // the `recv` branch in the select bellow
+            heartbeat.take();
+        }
+        *heartbeat = Some(send);
+        tokio::spawn(async move {
+            debug!("start new timeout");
+            let sleep = tokio::time::sleep(dur);
+            tokio::pin!(sleep);
+            tokio::select! {
+                _ = &mut recv => debug!("cancel previous timeout"),
+                _ = &mut sleep => {
+                    debug!("branch heartbeat timeout reached");
+                    p_heartbeat.lock().await.take();
+                    let _ = p_status.switch_to_candidate().await;
+                }
+            }
+        });
     }
 }

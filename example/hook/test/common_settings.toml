@@ -1,0 +1,10 @@
+timeout_min = 500
+timeout_max = 800
+# Min and max value in milisecond of the election timeout. Timeout is randomly choosen between these two values
+
+prepare_term_period = 500
+# Value in milisecond that separe term preparations, default 80
+# If this time is too short to finish the term preparation, an empty heartbeat
+# will be send and the content will be used for the next term. The hook doesn't
+# implement any problem management if you fail multiple times to send a term.
+# You can manage it yourself with the `send-term` script

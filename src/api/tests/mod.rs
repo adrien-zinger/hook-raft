@@ -63,11 +63,7 @@ async fn update_node_and_call_directly_the_leader() {
     let settings = Settings::default(); // server settings
     let node = Node {
         leader: Url::get_ptr("127.0.0.1:3001"),
-        ..Node::_init(
-            settings.clone(),
-            Status::<Leader>::create(),
-            DefaultHook {},
-        )
+        ..Node::_init(settings.clone(), Status::<Leader>::create(), DefaultHook {})
     };
     let sig_stop = Arc::new(AtomicBool::new(true));
     let sig_stop_c = sig_stop.clone();

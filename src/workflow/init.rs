@@ -4,14 +4,13 @@
 
 use crate::{
     api::{client, io_msg::UpdateNodeResult, server},
-    common::error::{errors, throw, Error, ErrorResult},
+    common::error::{throw, Error, ErrorResult},
     node::{Node, NodeInfo},
-    state::EStatus,
 };
-use tracing::trace;
+use tracing::{trace, warn};
 
 impl Node {
-    /// First workflow described in `init.md` specification. The folowing workflow
+    /// First workflow described in `init.md` specification. The following workflow
     /// is called only once time when the node start.
     ///
     /// - Start a server in a tokio task (then run in background).
@@ -26,109 +25,54 @@ impl Node {
     /// The error should be managed by the root caller of the function and cause
     /// at the end a graceful stop of the node.
     pub async fn initialize(&self) -> ErrorResult<()> {
-        {
-            let e_status = self.p_status.read().await;
-            match &*e_status {
-                EStatus::ConnectionPending(status) => status.clone(),
-                _ => throw!(Error::WrongStatus),
-            }
-        };
+        if !self.p_status.is_pending().await {
+            throw!(Error::WrongStatus)
+        }
         let node_clone = self.clone();
         tokio::spawn(async move { server::new(node_clone).await });
         if self.settings.nodes.is_empty() {
             eprintln!("warn: No nodes known, may be a configuration error");
-            if self.settings.follower {
-                throw!(errors::ERR_FOLLOWER_MUST_HAVE_KNOWN)
-            } else {
-                self.set_status_leader().await?;
-                return Ok(());
+        }
+        if !self.connect_to_leader().await? {
+            // No connection possible, turn into a follower.
+            if !self.settings.follower {
+                self.switch_to_candidate().await?;
             }
         }
-        self.connect_to_leader().await?;
         Ok(())
     }
 
     /// Workflow function on receive a connection request. Connection request are
-    /// done by a `update_node` call. Take a `UpdateNodeInput` conatining the
+    /// done by a `update_node` call. Take a `UpdateNodeInput` containing the
     /// calling node and if he want to be a follower.
     ///
     /// If you are a leader, you add the follower into a pool that is managed in
     /// the workflow `On heartbeat timeout` in `leader_workflow`.
     ///
-    /// Whatever your status, if the script `update-node` succed it returns
+    /// Whatever your status, if the script `update-node` succeed it returns
     /// an `UpdateNodeResult` and none otherwise.
-    pub async fn receive_connection_request(
-        &self,
-        input: NodeInfo,
-    ) -> Option<UpdateNodeResult> {
+    pub async fn receive_connection_request(&self, input: NodeInfo) -> Option<UpdateNodeResult> {
         trace!("receive connection request from {}", input.addr);
         if !self.hook.update_node() {
             return None;
         }
-        if let EStatus::Leader(_) = &*self.p_status.read().await {
-            self.node_list.write().await.remove(&input.addr);
-            self.follower_list.write().await.remove(&input.addr);
-            self.push_new_waiting_node(input).await;
+        if self.p_status.is_leader().await {
+            // self.node_list.write().await.remove(&input.addr);
             return Some(UpdateNodeResult {
-                leader_id: format!(
-                    "{}:{}",
-                    self.settings.addr, self.settings.port
-                ),
-                node_list: self
-                    .node_list
-                    .read()
-                    .await
-                    .iter()
-                    .cloned()
-                    .collect(),
-                follower_list: self
-                    .follower_list
-                    .read()
-                    .await
-                    .iter()
-                    .cloned()
-                    .collect(),
+                leader_id: format!("{}:{}", self.settings.addr, self.settings.port),
+                node_list: self.get_node_list().await,
             });
         };
-        match &*self.leader.read().await {
-            Some(leader_id) => Some(UpdateNodeResult {
-                leader_id: leader_id.to_string(),
-                node_list: self
-                    .node_list
-                    .read()
-                    .await
-                    .iter()
-                    .cloned()
-                    .collect(),
-                follower_list: self
-                    .follower_list
-                    .read()
-                    .await
-                    .iter()
-                    .cloned()
-                    .collect(),
-            }),
-            None => {
-                eprintln!(
-                    "cannot create an `UpdateNodeResult` without a leader"
-                );
-                None
-            }
-        }
-    }
 
-    async fn push_new_waiting_node(&self, node_info: NodeInfo) {
-        trace!("leader event: push a new waiting node {}", node_info.addr);
-        let ser = serde_json::to_string(&node_info).unwrap();
-        let mut waiting_nodes = self.waiting_nodes.lock().await;
-        if waiting_nodes.contains(&ser) {
-            eprintln!(
-                "warn: url `{}` already in the connection pool",
-                &node_info.addr
-            );
+        let leader_id = if let Some(leader_id) = self.p_status.leader().await {
+            leader_id.to_string()
         } else {
-            waiting_nodes.push_back(ser);
-        }
+            String::new()
+        };
+        Some(UpdateNodeResult {
+            leader_id,
+            node_list: self.get_node_list().await,
+        })
     }
 
     /// Called in `initialize` for the connection to a leader. Try to connect to each known
@@ -137,18 +81,13 @@ impl Node {
     /// # Error
     /// The error should be managed by the root caller of the function and cause
     /// at the end a graceful stop of the node.
-    async fn connect_to_leader(&self) -> ErrorResult<()> {
+    async fn connect_to_leader(&self) -> ErrorResult<bool> {
         let mut success = false;
         let mut to_leader = false;
         for url in self.settings.nodes.iter() {
-            match client::post_update_node(
-                &url.into(),
-                &self.settings,
-                self.uuid,
-            )
-            .await
-            {
+            match client::post_update_node(&url.into(), &self.settings, self.uuid).await {
                 Ok(result) => {
+                    /* Succeed to send an update node request */
                     success = true;
                     to_leader = result.leader_id == *url;
                     self.update(result).await;
@@ -162,40 +101,44 @@ impl Node {
             };
         }
         if !success {
-            throw!(Error::ImpossibleToBootstrap);
+            /* No connection possible */
+            return Ok(false);
         }
         trace!("connection {} to leader {}", success, to_leader);
         if !to_leader {
-            let leader = self.leader.read().await.clone().unwrap();
-            match client::post_update_node(
-                &leader.clone(),
-                &self.settings,
-                self.uuid,
-            )
-            .await
-            {
+            /* On bootstrap, if the leader is unknown, we just wait
+             * for an event. A new candidate can show up, or we can
+             * become a leader on a timeout.
+             *
+             * If we know who's the leader, we want to signal that we
+             * exist and we're actually running. */
+            let leader = match self.p_status.leader().await {
+                Some(leader) => leader,
+                _ => return Ok(false),
+            };
+            match client::post_update_node(&leader.clone(), &self.settings, self.uuid).await {
                 Ok(result) => self.update(result).await,
                 Err(warn) => {
-                    throw!(Error::CannotStartRpcServer(format!(
+                    warn!(
                         "Failed to connect to the leader: `{}`\n{:indent$?}",
                         leader,
                         *warn,
                         indent = 2
-                    )))
+                    );
+                    return Ok(false);
                 }
             }
         }
         trace!("connection success");
-        Ok(())
+        Ok(true)
     }
 
     async fn update(&self, result: UpdateNodeResult) {
         trace!("update leader {}", result.leader_id);
-        self.node_list.write().await.extend(result.node_list);
-        self.follower_list
-            .write()
+        // self.node_list.write().await.extend(result.node_list);
+        self.p_status
+            .switch_to_follower(result.leader_id.into())
             .await
-            .extend(result.follower_list);
-        *self.leader.write().await = Some(result.leader_id.into());
+            .unwrap();
     }
 }

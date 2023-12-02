@@ -3,36 +3,32 @@
 // LICENSE file in the root directory of this source tree.
 
 use crate::Node;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 impl Node {
-    pub(crate) async fn commit_entries(
-        &self,
-        old_commit_index: usize,
-        new_commit_index: usize,
-    ) {
-        let logs = self.logs.lock().await;
-        for entry in logs.iter_range(old_commit_index..new_commit_index + 1) {
-            debug!("commit entry {}", entry.id);
-            trace!("commit entry {} {}", entry.id, entry.content);
-            // todo: make that a constant (the "conn")
-            if let Some(u) = entry.parse_conn() {
-                if u.hash == self.uuid {
-                    trace!(
-                        "local node has been accepted by the current leader"
-                    );
-                    continue; // I'm ok with me
+    /// Commit up to the new commit index included.
+    /// Saturate and return if the index to commit isn't in cache.
+    pub(crate) async fn commit_entries(&self, new_commit_index: usize) {
+        let mut logs = self.logs.lock().await;
+        let from = logs.commit_index() + 1;
+        if from <= new_commit_index {
+            trace!("commit entries term from {from} to {new_commit_index}");
+            for index in from..=new_commit_index {
+                if !logs.check_commit(index) {
+                    debug!("stop commit at log term {index}");
+                    break;
                 }
-                trace!("add a new node in the local index {}", u.addr);
-                if u.follower {
-                    self.follower_list.write().await.insert(u.addr);
-                    trace!("follower list incremented");
-                } else {
-                    self.node_list.write().await.insert(u.addr);
-                    trace!("node list incremented");
-                }
+                let term = match logs.find(index) {
+                    Some(term) => term,
+                    None => {
+                        warn!("unable to find a log while committing");
+                        break;
+                    }
+                };
+                debug!("commit term {:?}", term);
+                logs.set_commit(index);
+                self.hook.commit_term(&term);
             }
-            self.hook.commit_term(&entry);
         }
     }
 }

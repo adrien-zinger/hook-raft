@@ -16,7 +16,7 @@ fn default_port() -> String {
     "3000".to_string()
 }
 const fn default_follower() -> bool {
-    true
+    false
 }
 const fn default_response_timeout() -> usize {
     20
@@ -33,8 +33,8 @@ const fn default_timeout_max() -> usize {
 const fn default_prepare_term_period() -> u64 {
     80
 }
-const fn default_send_term_period() -> u64 {
-    80
+const fn default_node_id() -> String {
+    String::new()
 }
 
 /// Represent the user settings in the settings.toml
@@ -56,14 +56,8 @@ pub struct Settings {
     pub response_timeout: usize,
     #[serde(default = "default_prepare_term_period")]
     pub prepare_term_period: u64,
-    #[serde(default = "default_send_term_period")]
-    pub send_term_period: u64,
-    #[serde(default = "default_timeout_max")]
-    pub max_timeout_value: usize,
-    #[serde(default = "default_timeout_min")]
-    pub min_inc_timeout: usize,
-    #[serde(default = "default_timeout_max")]
-    pub max_inc_timeout: usize,
+    #[serde(default = "default_node_id")]
+    pub node_id: String,
 }
 
 impl Settings {
@@ -73,18 +67,8 @@ impl Settings {
         let mut rng = rand::thread_rng();
         Duration::from_millis(rng.gen_range(self.timeout_min..=self.timeout_max) as u64)
     }
-    pub fn get_randomized_inc_timeout(&self) -> Duration {
-        let mut rng = rand::thread_rng();
-        Duration::from_millis(rng.gen_range(self.min_inc_timeout..=self.max_inc_timeout) as u64)
-    }
     pub fn get_prepare_term_sleep_duration(&self) -> Duration {
         Duration::from_millis(self.prepare_term_period)
-    }
-    pub fn get_send_term_sleep_duration(&self) -> Duration {
-        Duration::from_millis(self.send_term_period)
-    }
-    pub fn get_max_timeout_value(&self) -> Duration {
-        Duration::from_millis(self.max_timeout_value as u64)
     }
 }
 
@@ -99,27 +83,24 @@ impl Default for Settings {
             follower: default_follower(),
             response_timeout: default_response_timeout(),
             prepare_term_period: default_prepare_term_period(),
-            send_term_period: default_send_term_period(),
-            max_timeout_value: default_timeout_max(),
-            min_inc_timeout: default_timeout_min(),
-            max_inc_timeout: default_timeout_max(),
+            node_id: default_node_id(),
         }
     }
 }
 
 /// Read the config file `settings.toml` and parse the node configuration.
 ///
-/// Done when we are creating (dereferencing) the `StatusPtr` in `node.rs` for
+/// Done when we are creating (de-referencing) the `StatusPtr` in `node.rs` for
 /// the first time.
 pub fn read(opt_path: Option<String>) -> ErrorResult<Settings> {
     let path = opt_path.unwrap_or_else(|| "settings.toml".to_string());
     let config = Config::builder()
         .add_source(config::File::with_name(&path))
         .build()
-        .unwrap(); // todo remove the unwrap, prefere a nice error
+        .unwrap(); // todo remove the unwrap, prefer a nice error
     match config.try_deserialize::<Settings>() {
         Ok(settings) => Ok(settings),
         Err(error) => throw!(Error::CannotReadSettings(error)),
     }
-    // todo check if configuration is ok, (example: timeout_min < timeout_max)
+    // todo check if configuration is OK, (example: timeout_min < timeout_max)
 }

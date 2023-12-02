@@ -23,5 +23,6 @@ mod workflow;
 
 pub use common::config::Settings;
 pub use common::hook_trait::Hook;
+pub use common::scripts::DefaultHook;
 pub use log_entry::Term;
 pub use node::Node;

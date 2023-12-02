@@ -1,0 +1,19 @@
+node_id="server4"
+
+nodes = ['255.255.255.250:8080', '255.255.255.251:8080', '255.255.255.252:8080', '255.255.255.254:8080']
+# Optional list of public known nodes in a network. If this list appear to be empty, the node won't connect to anything and will be the current leader of his own network.
+
+# todo followers = ['15.126.208.72']
+# Optional list of known followers
+
+addr = "0.0.0.0"
+# Server local address, default "127.0.0.1"
+port = "8080"
+# Port used between nodes to communicate, default "3000"
+
+follower = false
+# If true, the current node will never ask for an election and will never be able to vote. Nevertheless you will receive all heartbeat and all information like a normal node. Some hooks will never be called obviously but you are a part of the network. If false, you will be considered as a potential candidate after a successfull bootstrap and will be able to vote.
+# default true
+
+response_timeout = 200
+# Value in millisecond before considering that a node will never respond

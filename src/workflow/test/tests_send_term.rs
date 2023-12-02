@@ -47,7 +47,6 @@ async fn term_preparation_1() {
             &node.p_status,
             &node.waiting_nodes,
             &node.node_list,
-            &node.follower_list,
             &node.hook,
         )
         .await;
@@ -64,8 +63,7 @@ async fn term_preparation_1() {
 
     let mut c = logs.back().unwrap().content;
     c.drain(.."conn:".len());
-    let conn_to: UpdateNodeInput =
-        serde_json::from_str(&c.to_string()).unwrap();
+    let conn_to: UpdateNodeInput = serde_json::from_str(&c.to_string()).unwrap();
     assert_eq!(conn_to.hash, hash);
     assert!(conn_to.follower);
 }
@@ -76,13 +74,9 @@ async fn term_preparation_1() {
 async fn create_term_for_node_1() {
     let known_follower = Url::from("127.0.0.1:8081");
 
-    let mut follower_list = HashSet::new();
-    follower_list.insert(known_follower.to_string());
-
     // first time we speak with him, we don't know where he is in his logs
 
     let node = Node {
-        follower_list: Arc::new(RwLock::new(follower_list)),
         leader: Arc::new(RwLock::new(Some(Url::from("127.0.0.1:8080")))),
         logs: Arc::new(Mutex::new(Entries::default())),
         ..Node::_init(
@@ -127,9 +121,6 @@ async fn create_term_for_node_1() {
 async fn create_term_for_node_2() {
     let known_follower = Url::from("127.0.0.1:8081");
 
-    let mut follower_list = HashSet::new();
-    follower_list.insert(known_follower.to_string());
-
     // first time we speak with him, we don't know where he is in his logs
 
     // initialize some logs
@@ -140,7 +131,6 @@ async fn create_term_for_node_2() {
     entries.append("4th term".to_string());
 
     let node = Node {
-        follower_list: Arc::new(RwLock::new(follower_list)),
         leader: Arc::new(RwLock::new(Some(Url::from("127.0.0.1:8080")))),
         logs: Arc::new(Mutex::new(entries)),
         ..Node::_init(
@@ -162,9 +152,6 @@ async fn create_term_for_node_2() {
 async fn create_term_for_node_3() {
     // same as create_term_for_node_2 but target already know some logs
     let known_follower = Url::from("127.0.0.1:8081");
-
-    let mut follower_list = HashSet::new();
-    follower_list.insert(known_follower.to_string());
 
     let mut next_indexes = HashMap::default();
     // target know 3 entries in logs
@@ -206,9 +193,6 @@ async fn create_term_for_node_4() {
     // same as create_term_for_node_3 but target already know other logs
     let known_follower = Url::from("127.0.0.1:8081");
 
-    let mut follower_list = HashSet::new();
-    follower_list.insert(known_follower.to_string());
-
     let mut next_indexes = HashMap::default();
     // target know 2 entries in logs
     next_indexes.insert(known_follower.clone(), 1);
@@ -221,7 +205,6 @@ async fn create_term_for_node_4() {
     entries.append("4th term".to_string());
 
     let node = Node {
-        follower_list: Arc::new(RwLock::new(follower_list)),
         next_indexes: Arc::new(RwLock::new(next_indexes)),
         leader: Arc::new(RwLock::new(Some(Url::from("127.0.0.1:8080")))),
         logs: Arc::new(Mutex::new(entries)),
@@ -249,9 +232,6 @@ async fn create_term_for_node_4() {
 #[traced_test]
 async fn create_term_for_node_5() {
     let known_follower = Url::from("127.0.0.1:8081");
-
-    let mut follower_list = HashSet::new();
-    follower_list.insert(known_follower.to_string());
 
     let mut next_indexes = HashMap::default();
     // target know everything

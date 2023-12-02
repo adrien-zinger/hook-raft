@@ -48,7 +48,7 @@ pub enum Warning {
 
 impl std::fmt::Display for Warning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &*self {
+        match self {
             Warning::CommandFail(str) => f.write_str(&format!("warning: command fail, {str}")),
             Warning::Timeout(str) => f.write_str(&format!("warning: timeout, {str}")),
             Warning::BadResult(err) => f.write_str(&format!(
@@ -88,10 +88,6 @@ pub mod errors {
 
     /***********************************************/
     /*     Const defined errors and warnings       */
-
-    pub const ERR_FOLLOWER_MUST_HAVE_KNOWN: Error = Error::InitializationFail(
-        "Followers must know some nodes to start, look at the `nodes` variable in your `settings.toml`",
-    );
 
     pub const WARN_INFO_TIMEOUT: Warning =
         Warning::Timeout("Timeout on get information client request");

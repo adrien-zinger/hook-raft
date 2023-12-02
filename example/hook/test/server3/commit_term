@@ -1,0 +1,2 @@
+#! /bin/bash
+echo term $1 $2 commited `date --rfc-3339=n` >> commit.log

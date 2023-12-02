@@ -5,17 +5,17 @@
 use crate::{
     api::{client, io_msg::AppendTermResult, Url},
     common::error::ErrorResult,
-    log_entry::Entries,
+    log_entry::{Entries, Term},
     node::Node,
-    state::StatusPtr,
+    state::Status,
     Hook,
 };
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
     sync::Arc,
 };
 use tokio::sync::{Mutex, RwLock};
-use tracing::{trace, warn};
+use tracing::{debug, trace, warn};
 
 /// Local enum used to trace how `post_new_append_term` worked
 /// See also `Node::manage_append_term_result`
@@ -24,7 +24,7 @@ enum ReactResult {
     Retry,
     /// Break the call loop
     Break,
-    /// Continue th call loop
+    /// Continue the call loop
     Continue,
 }
 
@@ -37,25 +37,17 @@ impl Node {
     ///
     /// Run the loops until someone else take the lead or handle ctrl_c.
     /// Leader understand if someone took the lead if another node is more
-    /// uptodate.
+    /// updated.
     ///
     /// Look at the Raft documentation for more information.
     pub async fn run_leader(&self) -> ErrorResult<()> {
         self.start_loop_term_preparation();
         loop {
-            if !self.p_status._is_leader().await {
+            if !self.p_status.is_leader().await {
+                trace!("stop lead");
                 break;
             }
-            let send_term_period = self.settings.get_send_term_sleep_duration();
-            if matches!(self.internal_run_leader().await?, ReactResult::Break) {
-                break;
-            }
-            let sleep = tokio::time::sleep(send_term_period);
-            tokio::pin!(sleep);
-            tokio::select! {
-                _ = sleep => {}
-                _ = tokio::signal::ctrl_c() => break,
-            };
+            let _ = self.internal_run_leader().await?;
         }
         Ok(())
     }
@@ -64,73 +56,65 @@ impl Node {
     ///
     /// Sends new terms for each nodes in the network
     async fn internal_run_leader(&self) -> ErrorResult<ReactResult> {
-        self.increment_commit_term().await;
-        let mut nodes = self.node_list.read().await.clone();
-        nodes.extend(self.follower_list.read().await.clone());
-        if nodes.is_empty() {
-            let logs = self.logs.lock().await;
-            if let Some(term) = logs.back() {
-                if let Some(u) = term.parse_conn() {
-                    nodes.insert(u.addr);
-                }
-            }
-        }
-        // todo: try to randomize the nodes list. We want to test with
-        //       measurements if it's more efficients with a lot of nodes.
-        //       (need to define a test case before!!)
+        let nodes = self.node_list.read().await.clone();
+        let mut fail_count = 0;
+        trace!("start a sending session as leader");
         for node in nodes.iter() {
-            if let ReactResult::Break =
-                self.post_new_append_term(node.into()).await?
+            if let ReactResult::Break = self
+                .post_new_append_term(node.into(), &mut fail_count)
+                .await?
             {
                 return Ok(ReactResult::Break);
             }
         }
+
+        // Increment the commit term after the calls
+        self.increment_commit_term().await;
+
+        if fail_count > (self.node_list.read().await.len() / 2) {
+            warn!("quorum is unreachable, switch to candidate");
+            self.switch_to_candidate().await?;
+            return Ok(ReactResult::Break);
+        }
+
         Ok(ReactResult::Continue)
     }
 
     /// Compute and post a new [AppendTermInput](crate::api::io_msg::AppendTermInput)
-    /// to the `target`. Manage internaly the result.
+    /// to the `target`. Manage internally the result.
     /// See `manage_append_term_result`.
     async fn post_new_append_term(
         &self,
         target: Url,
+        fail_count: &mut usize,
     ) -> ErrorResult<ReactResult> {
-        let mut retry = true;
+        let mut retry = 100;
         loop {
+            if !self.p_status.is_leader().await {
+                return Ok(ReactResult::Break);
+            }
             let url = target.clone();
             let append_term_input = self.create_term_input(&url).await;
-            match client::post_append_term(
-                &url,
-                &self.settings,
-                append_term_input,
-            )
-            .await
-            {
+            match client::post_append_term(&url, &self.settings, append_term_input).await {
                 Ok(result) => {
-                    let react =
-                        self.manage_append_term_result(url, result).await?;
+                    let react = self.manage_append_term_result(url, result).await?;
                     match react {
                         ReactResult::Retry => {
                             warn!("retry call to {}", target);
-                            if retry {
-                                retry = false;
-                            } else {
+                            retry -= 1;
+                            if retry == 0 {
                                 warn!("failed multiple call to {}", target);
                                 return Ok(ReactResult::Continue);
                             }
                         }
                         ReactResult::Break => return Ok(ReactResult::Break),
-                        ReactResult::Continue => {
-                            return Ok(ReactResult::Continue)
-                        }
+                        ReactResult::Continue => return Ok(ReactResult::Continue),
                     }
                 }
                 Err(p_warn) => {
-                    warn!("{}, remove node from our index", *p_warn);
-                    let mut a = self.node_list.write().await;
-                    a.remove(&target.to_string());
-                    let mut a = self.follower_list.write().await;
-                    a.remove(&target.to_string());
+                    warn!("{}", *p_warn);
+                    // Not sure if we want to ban node, call a hook instead
+                    *fail_count += 1;
                     return Ok(ReactResult::Continue);
                 }
             }
@@ -151,7 +135,7 @@ impl Node {
     /// # Result
     ///
     /// Can return a [ReactResult]
-    /// - continue means we're ok, send to next node.
+    /// - continue means we're OK, send to next node.
     /// - retry means that we should retry to send an append_term message to
     ///   the node.
     /// - break means that we're now a follower, break all previous loops and
@@ -161,77 +145,110 @@ impl Node {
         target: Url,
         result: AppendTermResult,
     ) -> ErrorResult<ReactResult> {
+        use crate::node::NextIndex::{Pending, Validated};
+
         {
             let mut next_indexes_guard = self.next_indexes.write().await;
-            if result.current_term > *self.p_current_term.lock().await {
+            if result.current_term.id > self.logs.lock().await.last_index() {
                 trace!(
-                    "{} became leader with term {}",
-                    target,
+                    "{target} became leader with term {}",
                     result.current_term.id
                 );
-                self.set_status_to_follower(target.to_string()).await?;
+                self.switch_to_follower(target).await?;
                 return Ok(ReactResult::Break);
             }
-            next_indexes_guard.insert(target.clone(), result.current_term.id);
+
+            if result.current_term.id > 0 {
+                if let Some(local_term) = self.leader_retreive_term(result.current_term.id).await {
+                    if local_term == result.current_term {
+                        debug!(
+                            "node return a current term {:#?} validated",
+                            result.current_term
+                        );
+                        next_indexes_guard
+                            .insert(target.clone(), Validated(result.current_term.id));
+                    } else {
+                        debug!(
+                            "node return a unmatched current term {:#?}",
+                            result.current_term
+                        );
+                        next_indexes_guard
+                            .insert(target.clone(), Pending(result.current_term.id - 1));
+                    }
+                } else {
+                    warn!("leader can't find a term");
+                }
+            } else {
+                next_indexes_guard.insert(target.clone(), Validated(1));
+            }
         }
+
         if result.success {
-            trace!("successfuly sent term to {}", target);
+            trace!("successfully sent term to {}", target);
             Ok(ReactResult::Continue)
         } else {
-            trace!("retry to send to {}", target);
+            trace!("retry to send to {} after {:#?}", target, result);
             Ok(ReactResult::Retry)
         }
     }
 
+    async fn leader_retreive_term(&self, index: usize) -> Option<Term> {
+        if let Some(term) = self.logs.lock().await.find(index) {
+            return Some(term);
+        }
+        if let Some(term) = self.hook.retreive_term(index) {
+            return Some(term);
+        }
+        None
+    }
+
     async fn increment_commit_term(&self) {
-        let mut rates = HashMap::<usize, usize>::new();
-        let mut max = 0;
-        let mut max_v = 0;
-        // todo: put that percent value in the setting file
-        // todo: assert if 0 in node creation
-        let percent = 55;
-        // todo: allow user to be explicit (consider also follower or waiting
-        //       nodes in tt_len)
         let nodes = self.node_list.read().await;
         let len = nodes.len();
         if nodes.is_empty() {
-            std::mem::drop(nodes);
-            let latest = self.logs.lock().await.back().unwrap().id;
-            let mut index = self.p_commit_index.lock().await;
-            if latest != *index {
-                trace!("update commited index to {} by default", latest);
-                self.commit_entries(*index, latest).await;
-                *index = latest;
-            }
+            trace!("pass commit phase with no nodes");
             return;
         }
-        for (url, next_index) in self.next_indexes.read().await.iter() {
-            if !nodes.contains(&url.to_string()) {
-                continue;
-            }
-            let n = if let Some(v) = rates.get_mut(next_index) {
-                *v += 1;
-                *v
-            } else {
-                rates.insert(*next_index, 1);
-                1
-            };
-            if n > max_v || n == max_v && max < *next_index {
-                max = *next_index;
-                max_v = n;
-            }
-        }
         std::mem::drop(nodes);
-        let mut index = self.p_commit_index.lock().await;
-        trace!("better rated term {} scored {}", max, max_v);
-        if max_v > len * percent / 100 && max > *index {
-            trace!("update commited index to {} thanks to majority", max);
-            self.commit_entries(*index, max).await;
-            *index = max;
+
+        let mut votes = Vec::<(usize, usize)>::new();
+        let mut set = HashSet::<usize>::new();
+
+        for index in self
+            .next_indexes
+            .read()
+            .await
+            .iter()
+            .map(|(_, v)| v.validated())
+        {
+            if !set.contains(&index) {
+                set.insert(index);
+                votes.push((index, 0));
+                votes.sort_by_key(|(index, _)| *index);
+            }
+            for (i, n) in votes.iter_mut() {
+                if *i <= index {
+                    *n += 1
+                } else {
+                    break;
+                }
+            }
         }
+
+        let mut max_term_id = 0;
+        debug!("check latest commit: votes {:?}", votes);
+        for (i, n) in votes {
+            // todo: take quorum from settings
+            if n >= (len / 2) {
+                max_term_id = i;
+            }
+        }
+
+        trace!("better rated term {max_term_id}");
+        self.commit_entries(max_term_id).await;
     }
 
-    /// Start a loop that prepare terms in parrallel. Fill the local `logs`
+    /// Start a loop that prepare terms in parallel. Fill the local `logs`
     /// parameter of the node
     fn start_loop_term_preparation(&self) {
         let p_logs = self.logs.clone();
@@ -240,19 +257,12 @@ impl Node {
         let waiting_nodes = self.waiting_nodes.clone();
         let hook = self.hook.clone();
         let nodes = self.node_list.clone();
-        let followers = self.follower_list.clone();
         // todo: remove unwraps and handle errors
         tokio::spawn(async move {
             loop {
-                let should_break = internal_term_preparation(
-                    &p_logs,
-                    &p_status,
-                    &waiting_nodes,
-                    &nodes,
-                    &followers,
-                    &hook,
-                )
-                .await;
+                let should_break =
+                    internal_term_preparation(&p_logs, &p_status, &waiting_nodes, &nodes, &hook)
+                        .await;
                 if should_break {
                     break;
                 }
@@ -270,45 +280,36 @@ impl Node {
 #[cfg(test)]
 pub async fn _term_preparation(
     p_logs: &Arc<Mutex<Entries>>,
-    p_status: &StatusPtr,
+    p_status: &Status,
     waiting_nodes: &Arc<Mutex<VecDeque<String>>>,
     nodes: &Arc<RwLock<HashSet<String>>>,
-    followers: &Arc<RwLock<HashSet<String>>>,
     hook: &Arc<Box<dyn Hook>>,
 ) -> bool {
-    internal_term_preparation(
-        p_logs,
-        p_status,
-        waiting_nodes,
-        nodes,
-        followers,
-        hook,
-    )
-    .await
+    internal_term_preparation(p_logs, p_status, waiting_nodes, nodes, hook).await
 }
 
 async fn internal_term_preparation(
     p_logs: &Arc<Mutex<Entries>>,
-    p_status: &StatusPtr,
+    p_status: &Status,
     waiting_nodes: &Arc<Mutex<VecDeque<String>>>,
     nodes: &Arc<RwLock<HashSet<String>>>,
-    followers: &Arc<RwLock<HashSet<String>>>,
     hook: &Arc<Box<dyn Hook>>,
 ) -> bool {
-    if !p_status._is_leader().await {
+    if !p_status.is_leader().await {
         // prepare term only if we are a Leader
         return true;
     }
-    if nodes.read().await.is_empty() && followers.read().await.is_empty() {
+    if nodes.read().await.is_empty() {
         // prepare term only if there is someone listening :-)
         let mut waiting_nodes_guard = waiting_nodes.lock().await;
         if !waiting_nodes_guard.is_empty() {
-            // create a term for the waiting node ;-)
+            // create a term for the waiting node
             trace!("starter connect term");
-            p_logs
+            let term = p_logs
                 .lock()
                 .await
                 .append(conn_term_preparation(&mut waiting_nodes_guard, hook));
+            hook.append_term(&term);
         }
         return false;
     }
@@ -320,7 +321,8 @@ async fn internal_term_preparation(
     } else {
         conn_term_preparation(&mut waiting_nodes_guard, hook)
     };
-    p_logs.lock().await.append(term_content);
+    let term = p_logs.lock().await.append(term_content);
+    hook.append_term(&term);
     false
 }
 

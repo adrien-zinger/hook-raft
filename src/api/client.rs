@@ -1,7 +1,7 @@
 use super::{
     io_msg::{
-        AppendTermInput, AppendTermResult, RequestVoteInput, RequestVoteResult,
-        UpdateNodeInput, UpdateNodeResult,
+        AppendTermInput, AppendTermResult, RequestVoteInput, RequestVoteResult, UpdateNodeInput,
+        UpdateNodeResult,
     },
     Url,
 };
@@ -17,10 +17,7 @@ use serde::Serialize;
 use std::time::Duration;
 use tracing::trace;
 
-async fn run_request(
-    req: Request<Body>,
-    timeout: Duration,
-) -> WarnResult<Response<Body>> {
+async fn run_request(req: Request<Body>, timeout: Duration) -> WarnResult<Response<Body>> {
     let client = Client::new();
     match tokio::time::timeout(timeout, client.request(req)).await {
         Ok(Ok(result)) => Ok(result),
@@ -46,14 +43,13 @@ async fn build<T: Serialize>(
             serde_json::to_string(&not_serialized_body).unwrap(),
         ))?; // TODO could be simplified
     let mut resp = run_request(req, timeout).await?;
-    trace!("post_update_node response: {}", resp.status());
     let body_resp = resp.body_mut();
     if let Ok(resp_bytes) = hyper::body::to_bytes(body_resp).await {
         match serde_json::from_slice(&resp_bytes) {
             Ok(http_result) => Ok(http_result),
             Err(err) => {
                 throw!(Warning::CommandFail(format!(
-                    "parse http response failed with err:\n{:indent$}",
+                    "parse HTTP response failed with err:\n{:indent$}",
                     err,
                     indent = 2
                 )))
@@ -82,7 +78,6 @@ pub(crate) async fn post_update_node(
     let body = UpdateNodeInput {
         hash: uuid,
         port: settings.port.clone(),
-        follower: settings.follower,
     };
     let target_uri = format!("http://{}/update_node", target);
     match build(

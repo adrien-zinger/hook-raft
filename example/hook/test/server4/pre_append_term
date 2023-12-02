@@ -1,0 +1,16 @@
+#! /bin/bash
+
+# Check in local files all terms we got.
+# Return the first id we fail to find.
+id=1
+while ! test $id < $1
+do
+	if ! test -f "./term_${id}"; then
+		echo -n $id
+		exit 0
+	fi
+	id=$(($id + 1))
+done
+
+echo -n $1
+exit 0

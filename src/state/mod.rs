@@ -24,81 +24,115 @@
 //! [Status<ConnectionPending>] and force the modification through the
 //! implementation of some `From` traits. Implementations are in [sm_impl].
 
-use std::{marker::PhantomData, sync::Arc};
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-pub mod node;
-pub mod sm_impl;
+use crate::{
+    api::Url,
+    common::error::{throw, Error, ErrorResult},
+};
+use std::sync::{Arc, Condvar, Mutex};
+use tokio::sync::RwLock;
+use tracing::trace;
 
-#[derive(Clone)]
-pub struct ConnectionPending;
-#[derive(Clone)]
-pub struct Follower;
-#[derive(Clone)]
-pub struct Candidate;
-#[derive(Clone)]
-pub struct Leader;
+mod node;
+pub use node::*;
 
-/// Enum used by the Node to contain his current state.
-/// Look at StatusPtr that Arc the Enum.
+#[derive(Clone, Copy)]
 pub enum EStatus {
-    /// The node is trying to connect to others
-    ConnectionPending(Status<ConnectionPending>),
-    /// The node is a follower inthe network
-    /// It can be a candidate in a while if the configuration
-    /// allow it.
-    Follower(Status<Follower>),
-    /// The node is a candidate in his network
-    Candidate(Status<Candidate>),
-    /// The node is the leader in his network
-    Leader(Status<Leader>),
-}
-
-/// Same as the [EStatus] but used in case we just want to conserve the last
-/// state without interact with the internal status.
-#[derive(Clone)]
-pub enum EmptyStatus {
-    Leader,
+    ConnectionPending,
     Follower,
     Candidate,
-    ConnectionPending,
+    Leader,
 }
 
 /***********************************************/
+/* "public" access to the status */
+/***********************************************/
 
 #[derive(Clone)]
-pub struct StatusPtr(Arc<RwLock<EStatus>>);
-
-// todo: Upgrade that implementation, allow user to give an opional guard,
-//       change the names of the functions.
-impl StatusPtr {
-    /// Check if leader
-    pub async fn _is_leader(&self) -> bool {
-        let guard = self.0.read().await;
-        matches!(*guard, EStatus::Leader(_))
-    }
-    /// Check if connection pending
-    pub async fn _is_pending(&self) -> bool {
-        let guard = self.0.read().await;
-        matches!(*guard, EStatus::ConnectionPending(_))
-    }
-    /// Check if connection is follower
-    pub async fn _is_follower(&self) -> bool {
-        let guard = self.0.read().await;
-        matches!(*guard, EStatus::Follower(_))
-    }
-    pub async fn _is_candidate(&self) -> bool {
-        let guard = self.0.read().await;
-        matches!(*guard, EStatus::Candidate(_))
-    }
-    pub async fn read(&'_ self) -> RwLockReadGuard<'_, EStatus> {
-        self.0.read().await
-    }
-    pub async fn write(&'_ self) -> RwLockWriteGuard<'_, EStatus> {
-        self.0.write().await
-    }
+pub struct Status {
+    inner: Arc<RwLock<(EStatus, Option<Url>)>>,
+    cv: Arc<(Mutex<()>, Condvar)>,
 }
 
-#[derive(Clone)]
-pub struct Status<T> {
-    t: PhantomData<T>,
+impl Status {
+    /// Wait a modification of the status
+    pub(crate) fn wait(&self) {
+        let (mutex, condvar) = &*self.cv;
+        let guard = mutex.lock().unwrap();
+        let _unused = condvar.wait(guard).unwrap();
+    }
+
+    pub(crate) async fn status(&self) -> EStatus {
+        self.inner.read().await.0
+    }
+
+    /// Switch the current status to candidate.
+    /// Follower -> Candidate
+    pub(crate) async fn switch_to_candidate(&self) -> ErrorResult<()> {
+        let mut inner = self.inner.write().await;
+        match inner.0 {
+            EStatus::Follower => { /* OK */ }
+            EStatus::ConnectionPending => { /* OK */ }
+            _ => throw!(Error::WrongStatus),
+        }
+        trace!("switch to candidate");
+        *inner = (EStatus::Candidate, None);
+        let (mutex, condvar) = &*self.cv;
+        let _guard = mutex.lock().unwrap();
+        condvar.notify_all();
+        Ok(())
+    }
+
+    /// Switch the current status to leader.
+    /// Candidate -> Leader
+    pub(crate) async fn switch_to_leader(&self) -> ErrorResult<()> {
+        let mut inner = self.inner.write().await;
+        match inner.0 {
+            EStatus::Candidate => { /* OK */ }
+            _ => throw!(Error::WrongStatus),
+        }
+        trace!("switch to leader");
+        *inner = (EStatus::Leader, None);
+        let (mutex, condvar) = &*self.cv;
+        let _guard = mutex.lock().unwrap();
+        condvar.notify_all();
+        Ok(())
+    }
+
+    /// Switch the current status to follower.
+    /// Every state can turn into a follower
+    pub(crate) async fn switch_to_follower(&self, leader: Url) -> ErrorResult<()> {
+        trace!("switch to follower");
+        let mut inner = self.inner.write().await;
+        *inner = (EStatus::Follower, Some(leader));
+        let (mutex, condvar) = &*self.cv;
+        let _guard = mutex.lock().unwrap();
+        condvar.notify_all();
+        Ok(())
+    }
+
+    pub fn connection_pending() -> Status {
+        let inner = Arc::new(RwLock::new((EStatus::ConnectionPending, None)));
+        let cv = Arc::new((Mutex::new(()), Condvar::new()));
+        Status { inner, cv }
+    }
+
+    pub async fn leader(&self) -> Option<Url> {
+        self.inner.read().await.1.clone()
+    }
+
+    pub async fn is_pending(&self) -> bool {
+        matches!(&self.inner.read().await.0, EStatus::ConnectionPending)
+    }
+
+    pub async fn is_candidate(&self) -> bool {
+        matches!(&self.inner.read().await.0, EStatus::Candidate)
+    }
+
+    pub async fn is_leader(&self) -> bool {
+        matches!(&self.inner.read().await.0, EStatus::Leader)
+    }
+
+    pub async fn is_follower(&self) -> bool {
+        matches!(&self.inner.read().await.0, EStatus::Follower)
+    }
 }

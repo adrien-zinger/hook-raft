@@ -3,7 +3,7 @@
 // LICENSE file in the root directory of this source tree.
 
 //! Module declaration for all workflows described in initial specifications
-//! Look at dev documentation for more informations
+//! Look at dev documentation for more information
 
 pub mod append_term;
 pub mod candidate;

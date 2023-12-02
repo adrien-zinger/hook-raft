@@ -12,32 +12,38 @@ use crate::{
     Node,
 };
 
+use tracing::{debug, trace};
+
 impl Node {
     /// Node reaction on receive a vote request.
-    pub async fn receive_request_vote(
-        &self,
-        input: RequestVoteInput,
-    ) -> RequestVoteResult {
-        let current_term = self.p_current_term.lock().await.clone();
+    pub async fn receive_request_vote(&self, input: RequestVoteInput) -> RequestVoteResult {
+        trace!("receive a vote request {:#?}", input);
+        let current_term = self.logs.lock().await.current_term();
         // todo: hook receive request vote
         if input.term.id < current_term.id {
+            debug!("refuse candidates because term < current");
             return RequestVoteResult {
                 current_term,
                 vote_granted: false,
             };
         }
-        let latest = self.logs.lock().await.back().unwrap();
         let mut opt_vote = self.vote_for.write().await;
+
         let vote_granted = if let Some(vote) = opt_vote.clone() {
-            input.last_term.id > vote.1.id
+            debug!("compare to previous vote");
+            input.last_term > vote.1 || input.candidate_id == vote.0
         } else {
-            input.last_term.id >= latest.id
+            debug!("compare to previous vote");
+            input.last_term >= self.logs.lock().await.commit_index()
         };
+
+        debug!("vote granted: {vote_granted}");
         if vote_granted {
-            *opt_vote = Some((input.candidate_id, input.last_term))
+            *opt_vote = Some((input.candidate_id, input.last_term));
+            self.reset_timeout().await
         }
         RequestVoteResult {
-            current_term,
+            current_term: self.logs.lock().await.current_term(),
             vote_granted,
         }
     }

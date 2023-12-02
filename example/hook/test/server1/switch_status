@@ -1,0 +1,2 @@
+#! /bin/bash
+echo switch to $1 >> "status.log"

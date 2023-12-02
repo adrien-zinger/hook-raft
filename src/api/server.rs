@@ -9,7 +9,7 @@ use hyper::{Body, Request, Response, Server};
 use hyper::{Method, StatusCode};
 use serde::Deserialize;
 use std::{convert::Infallible, net::SocketAddr};
-use tracing::error;
+use tracing::{error, trace};
 
 async fn shutdown_signal() {
     tokio::signal::ctrl_c()
@@ -20,18 +20,14 @@ async fn shutdown_signal() {
 async fn body_to_bytes(body: Body) -> Result<Bytes, ServerError> {
     match hyper::body::to_bytes(body).await {
         Ok(body) => Ok(body),
-        Err(err) => {
-            return Err(ServerError::CannotDeserializeBody(format!(
-                "error while reading the body: {:?}",
-                err
-            )))
-        }
+        Err(err) => Err(ServerError::CannotDeserializeBody(format!(
+            "error while reading the body: {:?}",
+            err
+        ))),
     }
 }
 
-fn deserialize_body<'a, T: Deserialize<'a>>(
-    body_bytes: &'a Bytes,
-) -> Result<T, ServerError> {
+fn deserialize_body<'a, T: Deserialize<'a>>(body_bytes: &'a Bytes) -> Result<T, ServerError> {
     match serde_json::from_slice(body_bytes) {
         Ok(res) => Ok(res),
         Err(err) => Err(ServerError::CannotDeserializeBody(format!(
@@ -49,21 +45,20 @@ async fn on_receive_update_node(
 ) {
     // todo: check in the body if the `node`
     // value is similar to the caller. (should return an error if not)
+    trace!("receive update node request");
     let input: UpdateNodeInput = deserialize_body(bytes).unwrap();
     let addr = format!("{}:{}", remote.ip(), input.port);
     let res = node
         .receive_connection_request(NodeInfo {
             hash: input.hash,
             addr,
-            follower: input.follower,
         })
         .await;
     match res {
         Some(res) => {
-            *response.body_mut() =
-                serde_json::to_string(&HttpResult::UpdateNode(res))
-                    .unwrap()
-                    .into()
+            *response.body_mut() = serde_json::to_string(&HttpResult::UpdateNode(res))
+                .unwrap()
+                .into()
         }
         None => {
             *response.body_mut() = errors::I_DONT_NOW_THE_LEADER.clone().into();
@@ -71,11 +66,7 @@ async fn on_receive_update_node(
     }
 }
 
-async fn on_receive_append_term(
-    node: &Node,
-    bytes: &Bytes,
-    response: &mut Response<Body>,
-) {
+async fn on_receive_append_term(node: &Node, bytes: &Bytes, response: &mut Response<Body>) {
     // todo: check in the body if the `node`
     // value is similar to the caller. (should return an error if not)
     let res = node
@@ -83,23 +74,17 @@ async fn on_receive_append_term(
         .await;
     match res {
         Ok(res) => {
-            *response.body_mut() =
-                serde_json::to_string(&HttpResult::AppendTerm(res))
-                    .unwrap()
-                    .into()
+            *response.body_mut() = serde_json::to_string(&HttpResult::AppendTerm(res))
+                .unwrap()
+                .into()
         }
         Err(_) => {
-            *response.body_mut() =
-                errors::ERR_APPEND_TERM_SERVER_GENERIC.clone().into();
+            *response.body_mut() = errors::ERR_APPEND_TERM_SERVER_GENERIC.clone().into();
         }
     }
 }
 
-async fn on_receive_request_vote(
-    node: &Node,
-    bytes: &Bytes,
-    response: &mut Response<Body>,
-) {
+async fn on_receive_request_vote(node: &Node, bytes: &Bytes, response: &mut Response<Body>) {
     // todo: check in the body if the `node`
     // value is similar to the caller. (should return an error if not)
     let res = node
@@ -151,7 +136,7 @@ fn manage_server_error(
     }
 }
 
-// todo, remove all the "unwrap" here and try to make a nice http response
+// todo, remove all the "unwrap" here and try to make a nice HTTP response
 async fn service(
     req: Request<Body>,
     node: Node,
@@ -168,7 +153,6 @@ async fn service(
 pub async fn new(node: Node) -> ErrorResult<()> {
     use crate::common::error::throw;
     use hyper::server::conn::AddrStream;
-    use tracing::trace;
 
     let full_addr = &format!("{}:{}", node.settings.addr, node.settings.port);
     trace!("Startup server on {}", full_addr);
