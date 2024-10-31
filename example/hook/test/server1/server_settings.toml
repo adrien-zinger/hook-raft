@@ -1,15 +1,5 @@
 node_id="server1"
 
-
-
-nodes = ['255.255.255.251:8080', '255.255.255.252:8080', '255.255.255.253:8080', '255.255.255.254:8080']
-# Optional list of public known nodes in a network. If this list appear to be empty, the node won't connect to anything and will be the current leader of his own network.
-
-# todo followers = ['15.126.208.72']
-# Optional list of known followers
-
-addr = "0.0.0.0"
-# Server local address, default "127.0.0.1"
 port = "8080"
 # Port used between nodes to communicate, default "3000"
 
