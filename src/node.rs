@@ -3,11 +3,11 @@
 // LICENSE file in the root directory of this source tree.
 
 use crate::{
-    api::Url,
     common::{
         config::{self, Settings},
         error::{throw, Error, ErrorResult},
         hook_trait::Hook,
+        Url,
     },
     log_entry::Entries,
     state::{EStatus, Status},
@@ -72,6 +72,16 @@ pub struct Node {
     pub hook: Arc<Box<dyn Hook>>,
     /// Unique node id, used as a temporary identifier in the network
     pub uuid: [u8; 16],
+    /// Container for mock return values in some unit tests
+    #[cfg(test)]
+    pub utest_data: UTestData,
+}
+
+/// Container for mock return values in some unit tests
+#[cfg(test)]
+#[derive(Clone, Default)]
+pub struct UTestData {
+    pub error_result_bool: Option<ErrorResult<bool>>,
 }
 
 // todo: verify if leader correctly update the `last_applied` and call the
@@ -97,6 +107,8 @@ impl Node {
             vote_for: Default::default(),
             hook: Arc::new(Box::new(hook)),
             uuid: generate_uuid(),
+            #[cfg(test)]
+            utest_data: Default::default(),
         }
     }
 
@@ -130,7 +142,7 @@ impl Node {
 
     #[cfg(test)]
     /// Creates a node with the given settings and status
-    pub fn _init(settings: Settings, p_status: StatusPtr, hook: impl Hook + 'static) -> Self {
+    pub fn test_new(settings: Settings, p_status: Status, hook: impl Hook + 'static) -> Self {
         Self {
             p_status,
             ..Self::default(settings, hook)

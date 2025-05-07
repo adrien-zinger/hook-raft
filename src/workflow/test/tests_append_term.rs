@@ -7,7 +7,6 @@ use crate::{
     common::{config::Settings, scripts::DefaultHook},
     log_entry::{Entries, Term},
     node::Node,
-    state::{ConnectionPending, Follower, Status},
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;

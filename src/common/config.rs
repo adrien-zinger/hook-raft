@@ -100,7 +100,7 @@ pub fn read(opt_path: Option<String>) -> ErrorResult<Settings> {
         .unwrap(); // todo remove the unwrap, prefer a nice error
     match config.try_deserialize::<Settings>() {
         Ok(settings) => Ok(settings),
-        Err(error) => throw!(Error::CannotReadSettings(error)),
+        Err(error) => throw!(Error::CannotReadSettings(std::sync::Arc::new(error))),
     }
     // todo check if configuration is OK, (example: timeout_min < timeout_max)
 }

@@ -3,7 +3,7 @@
 // LICENSE file in the root directory of this source tree.
 
 use crate::{
-    api::{client, io_msg::UpdateNodeResult, server},
+    api::io_msg::UpdateNodeResult,
     common::error::{throw, Error, ErrorResult},
     node::{Node, NodeInfo},
 };
@@ -18,7 +18,7 @@ impl Node {
     /// - Try to connect to each nodes taken from the `nodes` variable in the
     ///   `settings.toml`.
     ///
-    /// If success, it should know the leader address (`leader_id`). And try to
+    /// If success, it should know the leader address (`leader_id`). Then try to
     /// connect to it.
     ///
     /// # Error
@@ -29,7 +29,8 @@ impl Node {
             throw!(Error::WrongStatus)
         }
         let node_clone = self.clone();
-        tokio::spawn(async move { server::new(node_clone).await });
+        #[cfg(not(test))] // no server in unit test
+        tokio::spawn(async move { crate::api::server::new(node_clone).await });
         if self.settings.nodes.is_empty() {
             eprintln!("warn: No nodes known, may be a configuration error");
         }
@@ -81,7 +82,10 @@ impl Node {
     /// # Error
     /// The error should be managed by the root caller of the function and cause
     /// at the end a graceful stop of the node.
-    async fn connect_to_leader(&self) -> ErrorResult<bool> {
+    #[cfg(not(test))] // mocked in unit tests
+    async fn connect_to_leader(&self) -> ErrorResult<bool> /* TODO just return bool? */ {
+        use crate::api::client;
+
         let mut success = false;
         let mut to_leader = false;
         for url in self.settings.nodes.iter() {
@@ -106,7 +110,10 @@ impl Node {
         }
         trace!("connection {} to leader {}", success, to_leader);
         if !to_leader {
-            /* On bootstrap, if the leader is unknown, we just wait
+            /*
+             * Connected to the network, but not to the leader.
+             *
+             * On bootstrap, if the leader is unknown, we just wait
              * for an event. A new candidate can show up, or we can
              * become a leader on a timeout.
              *

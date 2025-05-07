@@ -1,15 +1,13 @@
-use super::{
-    io_msg::{
-        AppendTermInput, AppendTermResult, RequestVoteInput, RequestVoteResult, UpdateNodeInput,
-        UpdateNodeResult,
-    },
-    Url,
+use super::io_msg::{
+    AppendTermInput, AppendTermResult, RequestVoteInput, RequestVoteResult, UpdateNodeInput,
+    UpdateNodeResult,
 };
 use crate::{
     api::io_msg::HttpResult,
     common::{
         config::Settings,
         error::{errors, throw, WarnResult, Warning},
+        Url,
     },
 };
 use hyper::{Body, Client, Method, Request, Response};

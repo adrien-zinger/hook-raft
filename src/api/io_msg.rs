@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::common::error::HttpErrorResult;
 use crate::log_entry::Term;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -8,21 +9,6 @@ pub enum HttpResult {
     UpdateNode(UpdateNodeResult),
     AppendTerm(AppendTermResult),
     Error(HttpErrorResult),
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct HttpErrorResult {
-    pub err_id: String,
-    pub message: String,
-}
-
-impl std::fmt::Display for HttpErrorResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!(
-            "network error id: {}\n error message: {}",
-            self.err_id, self.message
-        ))
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]

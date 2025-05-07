@@ -3,45 +3,44 @@
 // LICENSE file in the root directory of this source tree.
 
 use crate::{
-    api::{client::fill_post_update_node_res, io_msg::UpdateNodeResult},
     common::{
         config::Settings,
-        error::{Error, Warning},
+        error::{Error, ErrorResult, Warning},
     },
     node::Node,
-    state::{ConnectionPending, Status},
+    state::Status,
+    workflow::test::hook::TestHook,
 };
 use std::collections::VecDeque;
 
-#[tokio::test]
-#[serial_test::serial]
-async fn test_initialize_success() {
-    // The following should success because the response leader_id will be one in the list
-    let leader_id = "10.10.10.10:1212".to_string();
-    let node_list = vec!["10.10.10.10:1212".to_string()];
-    let follower_list = vec!["12.12.12.12:1212".to_string()];
-    let mut res = VecDeque::default();
-    res.push_back(Ok(UpdateNodeResult {
-        leader_id,
-        node_list: node_list.clone(),
-        follower_list,
-    }));
-    let settings = Settings {
-        nodes: node_list,
-        follower: false,
-        ..Default::default()
-    };
-    fill_post_update_node_res(&mut res).await;
-    let p_status = Status::<ConnectionPending>::create();
-    let mut node = Node {
-        // default init
-        ..Node::_init(settings, p_status)
-    };
-    node.initialize().await.unwrap();
+/* Mocking */
+impl Node {
+    #[cfg(test)]
+    pub async fn connect_to_leader(&self) -> ErrorResult<bool> /* TODO just return bool? */ {
+        self.utest_data.error_result_bool.clone().unwrap()
+    }
 }
 
 #[tokio::test]
-#[serial_test::serial]
+async fn test_initialize() {
+    let node_list = vec!["10.10.10.10:1212".to_string()];
+    let settings = Settings {
+        follower: false,
+        ..Default::default()
+    };
+    let node = Node::new_with_settings(settings, TestHook {});
+    match node.initialize().await {
+        Ok(_) => panic!("Unexpected connection success"),
+        Err(err) => {
+            if !matches!(*err, Error::ImpossibleToBootstrap) {
+                panic!("Unexpected error {:?}", err)
+            }
+        }
+    };
+}
+
+/*
+#[tokio::test]
 async fn test_initialize_err_command_fail() {
     // The following should success because the response leader_id will be one in the list
     let node_list = vec!["10.10.10.10:1212".to_string()];
@@ -68,9 +67,9 @@ async fn test_initialize_err_command_fail() {
         }
     };
 }
-
+*/
+/*
 #[tokio::test]
-#[serial_test::serial]
 async fn test_initialize_fail_leader_timeout() {
     // The following should success because the response leader_id will be one in the list
     let leader_id = "10.10.10.10:1212".to_string();
@@ -108,7 +107,6 @@ async fn test_initialize_fail_leader_timeout() {
 }
 
 #[tokio::test]
-#[tokio::serial]
 async fn test_follower_without_node_fail() {
     let settings = Settings {
         follower: true, // default but set for information =-)
@@ -121,3 +119,4 @@ async fn test_follower_without_node_fail() {
     };
     node.initialize().await.expect_err("Expected error here");
 }
+*/

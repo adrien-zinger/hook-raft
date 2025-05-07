@@ -24,16 +24,15 @@
 //! [Status<ConnectionPending>] and force the modification through the
 //! implementation of some `From` traits. Implementations are in [sm_impl].
 
-use crate::{
-    api::Url,
-    common::error::{throw, Error, ErrorResult},
+use crate::common::{
+    error::{throw, Error, ErrorResult},
+    Url,
 };
 use std::sync::{Arc, Condvar, Mutex};
 use tokio::sync::RwLock;
 use tracing::trace;
 
 mod node;
-pub use node::*;
 
 #[derive(Clone, Copy)]
 pub enum EStatus {

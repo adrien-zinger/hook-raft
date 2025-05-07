@@ -196,7 +196,8 @@ impl Node {
             });
         }
 
-        let _ = self.switch_to_follower(input.leader_id.clone().into())
+        let _ = self
+            .switch_to_follower(input.leader_id.clone().into())
             .await;
         Ok(())
     }

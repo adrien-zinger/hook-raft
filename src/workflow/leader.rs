@@ -2,14 +2,17 @@
 // This source code is licensed under the GPLv3 license, you can found the
 // LICENSE file in the root directory of this source tree.
 
+#[cfg(not(test))]
+use crate::api::client;
 use crate::{
-    api::{client, io_msg::AppendTermResult, Url},
-    common::error::ErrorResult,
+    api::io_msg::AppendTermResult,
+    common::{error::ErrorResult, Url},
     log_entry::{Entries, Term},
     node::Node,
     state::Status,
     Hook,
 };
+
 use std::{
     collections::{HashSet, VecDeque},
     sync::Arc,
@@ -95,6 +98,7 @@ impl Node {
             }
             let url = target.clone();
             let append_term_input = self.create_term_input(&url).await;
+            #[cfg(not(test))]
             match client::post_append_term(&url, &self.settings, append_term_input).await {
                 Ok(result) => {
                     let react = self.manage_append_term_result(url, result).await?;
@@ -118,6 +122,8 @@ impl Node {
                     return Ok(ReactResult::Continue);
                 }
             }
+            #[cfg(test)]
+            todo!("implement unit test behaviour")
         }
     }
 

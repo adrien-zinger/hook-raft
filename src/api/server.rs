@@ -1,6 +1,6 @@
 use super::io_msg::{HttpResult, UpdateNodeInput};
 use crate::{
-    common::error::{errors, Error, ErrorResult, ServerError},
+    common::error::{Error, ErrorResult, HttpErrorResult, ServerError},
     node::{Node, NodeInfo},
 };
 use hyper::service::{make_service_fn, service_fn};
@@ -61,7 +61,7 @@ async fn on_receive_update_node(
                 .into()
         }
         None => {
-            *response.body_mut() = errors::I_DONT_NOW_THE_LEADER.clone().into();
+            *response.body_mut() = I_DONT_NOW_THE_LEADER.clone().into();
         }
     }
 }
@@ -79,7 +79,7 @@ async fn on_receive_append_term(node: &Node, bytes: &Bytes, response: &mut Respo
                 .into()
         }
         Err(_) => {
-            *response.body_mut() = errors::ERR_APPEND_TERM_SERVER_GENERIC.clone().into();
+            *response.body_mut() = ERR_APPEND_TERM_SERVER_GENERIC.clone().into();
         }
     }
 }
@@ -182,4 +182,33 @@ pub async fn new(node: Node) -> ErrorResult<()> {
 #[cfg(feature = "mock_api")]
 pub async fn new(node: Node) -> ErrorResult<()> {
     Ok(())
+}
+
+/***********************************************/
+/* ERRORS USED BY THE SERVER API              **/
+/***********************************************/
+
+lazy_static::lazy_static! {
+    pub static ref I_DONT_NOW_THE_LEADER: String = {
+        serde_json::to_string(&HttpResult::Error(HttpErrorResult {
+            err_id: "512".to_string(),
+            message: "sorry I don't know the leader of the network".to_string(),
+        }))
+        .unwrap()
+    };
+
+    pub static ref ERR_APPEND_TERM_SERVER_GENERIC: String = {
+        serde_json::to_string(&HttpResult::Error(HttpErrorResult {
+            err_id: "513".to_string(),
+            message: "Server side generic error on append term".to_string(),
+        }))
+        .unwrap()
+    };
+}
+
+#[cfg(test)]
+#[test]
+fn deser_server_err() {
+    let _ = *I_DONT_NOW_THE_LEADER;
+    let _ = *ERR_APPEND_TERM_SERVER_GENERIC;
 }

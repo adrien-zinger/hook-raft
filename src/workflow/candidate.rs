@@ -22,9 +22,11 @@
 //! [crate::workflow::append_term], at the end of the candidature, start the
 //! follower workflow [crate::workflow::follower].
 
+#[cfg(not(test))]
+use crate::api::client;
 use crate::{
-    api::{client, io_msg::RequestVoteInput, Url},
-    common::error::ErrorResult,
+    api::io_msg::RequestVoteInput,
+    common::{error::ErrorResult, Url},
     log_entry::LogEntry,
     node::Node,
     Settings,
@@ -130,6 +132,7 @@ async fn call_candidature(
     granted_vote_count: &mut usize,
 ) {
     // todo: we may want in case of fail make a hook
+    #[cfg(not(test))]
     match client::post_request_vote(
         target,
         settings,
@@ -156,4 +159,6 @@ async fn call_candidature(
             );
         }
     }
+    #[cfg(test)]
+    todo!("define unit test behaviour")
 }

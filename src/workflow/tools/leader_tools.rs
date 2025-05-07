@@ -3,7 +3,8 @@
 // LICENSE file in the root directory of this source tree.
 
 use crate::{
-    api::{io_msg::AppendTermInput, Url},
+    api::io_msg::AppendTermInput,
+    common::Url,
     log_entry::{Entries, Term},
     node::Node,
 };

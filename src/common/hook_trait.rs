@@ -22,6 +22,3 @@ pub trait Hook: Send + Sync {
     fn retreive_terms(&self, from: usize, to: usize) -> Option<Vec<Term>>;
     fn switch_status(&self, status: EStatus);
 }
-
-// todo, the user should be able to provide a dir where the scripts are located
-// instead of the current_dir
