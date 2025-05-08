@@ -4,9 +4,16 @@
 
 use crate::{
     api::io_msg::UpdateNodeResult,
-    common::error::{throw, Error, ErrorResult},
+    common::{
+        error::{throw, Error, ErrorResult, WarnResult},
+        Url,
+    },
     node::{Node, NodeInfo},
+    Settings,
 };
+
+#[cfg(not(test))]
+use crate::api::{client, server};
 use tracing::{trace, warn};
 
 impl Node {
@@ -30,7 +37,7 @@ impl Node {
         }
         let node_clone = self.clone();
         #[cfg(not(test))] // no server in unit test
-        tokio::spawn(async move { crate::api::server::new(node_clone).await });
+        tokio::spawn(async move { server::new(node_clone).await });
         if self.settings.nodes.is_empty() {
             eprintln!("warn: No nodes known, may be a configuration error");
         }
@@ -82,14 +89,14 @@ impl Node {
     /// # Error
     /// The error should be managed by the root caller of the function and cause
     /// at the end a graceful stop of the node.
-    #[cfg(not(test))] // mocked in unit tests
     async fn connect_to_leader(&self) -> ErrorResult<bool> /* TODO just return bool? */ {
-        use crate::api::client;
-
         let mut success = false;
         let mut to_leader = false;
         for url in self.settings.nodes.iter() {
-            match client::post_update_node(&url.into(), &self.settings, self.uuid).await {
+            match self
+                .send_init_update_node(&url.into(), &self.settings, self.uuid)
+                .await
+            {
                 Ok(result) => {
                     /* Succeed to send an update node request */
                     success = true;
@@ -123,7 +130,10 @@ impl Node {
                 Some(leader) => leader,
                 _ => return Ok(false),
             };
-            match client::post_update_node(&leader.clone(), &self.settings, self.uuid).await {
+            match self
+                .send_init_update_node(&leader.clone(), &self.settings, self.uuid)
+                .await
+            {
                 Ok(result) => self.update(result).await,
                 Err(warn) => {
                     warn!(
@@ -138,6 +148,16 @@ impl Node {
         }
         trace!("connection success");
         Ok(true)
+    }
+
+    #[cfg(not(test))] // Mocked in unit tests
+    async fn send_init_update_node(
+        &self,
+        target: &Url,
+        settings: &Settings,
+        uuid: [u8; 16],
+    ) -> WarnResult<UpdateNodeResult> {
+        client::post_update_node(target, settings, uuid).await
     }
 
     async fn update(&self, result: UpdateNodeResult) {

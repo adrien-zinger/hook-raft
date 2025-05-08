@@ -5,5 +5,6 @@
 //mod tests_append_term;
 #[cfg(test)]
 mod hook;
+mod mock;
 mod tests_init;
 //mod tests_send_term;

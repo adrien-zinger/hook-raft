@@ -13,30 +13,18 @@ use crate::{
 };
 use std::collections::VecDeque;
 
-/* Mocking */
-impl Node {
-    #[cfg(test)]
-    pub async fn connect_to_leader(&self) -> ErrorResult<bool> /* TODO just return bool? */ {
-        self.utest_data.error_result_bool.clone().unwrap()
-    }
-}
-
 #[tokio::test]
-async fn test_initialize() {
-    let node_list = vec!["10.10.10.10:1212".to_string()];
+async fn test_initialize_success() {
     let settings = Settings {
         follower: false,
+        nodes: vec!["10.10.10.10:1212".to_string()],
         ..Default::default()
     };
-    let node = Node::new_with_settings(settings, TestHook {});
-    match node.initialize().await {
-        Ok(_) => panic!("Unexpected connection success"),
-        Err(err) => {
-            if !matches!(*err, Error::ImpossibleToBootstrap) {
-                panic!("Unexpected error {:?}", err)
-            }
-        }
-    };
+
+    let mut node = Node::new_with_settings(settings, TestHook {});
+    node.utest_data.error_result_bool = Some(Ok(true));
+
+    assert!(node.initialize().await.is_ok());
 }
 
 /*
