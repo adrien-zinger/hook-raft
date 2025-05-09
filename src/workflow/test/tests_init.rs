@@ -21,7 +21,7 @@ async fn test_initialize_success() {
         ..Default::default()
     };
 
-    let mut node = Node::new_with_settings(settings, TestHook {});
+    let mut node = Node::new_with_settings(settings, TestHook::default());
     node.utest_data.error_result_bool = Some(Ok(true));
 
     assert!(node.initialize().await.is_ok());

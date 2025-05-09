@@ -1,6 +1,12 @@
 use crate::{state::EStatus, Hook, Term};
 
-pub struct TestHook;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
+#[derive(Default)]
+pub struct TestHook {
+    pub pre_append_terms: Arc<Mutex<VecDeque<usize>>>,
+}
 
 impl Hook for TestHook {
     fn update_node(&self) -> bool {
@@ -8,7 +14,7 @@ impl Hook for TestHook {
     }
 
     fn pre_append_term(&self, _term: &Term) -> Option<usize> {
-        None
+        (&mut *self.pre_append_terms.lock().unwrap()).pop_back()
     }
 
     fn append_term(&self, _term: &Term) -> bool {
