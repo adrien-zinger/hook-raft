@@ -72,7 +72,7 @@ impl Node {
             });
         };
 
-        let leader_id = if let Some(leader_id) = self.p_status.leader().await {
+        let leader_id = if let Some(leader_id) = self.p_status.get_leader().await {
             leader_id.to_string()
         } else {
             String::new()
@@ -126,7 +126,7 @@ impl Node {
              *
              * If we know who's the leader, we want to signal that we
              * exist and we're actually running. */
-            let leader = match self.p_status.leader().await {
+            let leader = match self.p_status.get_leader().await {
                 Some(leader) => leader,
                 _ => return Ok(false),
             };

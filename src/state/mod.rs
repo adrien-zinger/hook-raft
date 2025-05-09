@@ -7,7 +7,7 @@
 //! - A Follower
 //! - A candidate
 //!
-//! In some cases, the connection is just pending. Whatever, there is a
+//! In some cases, the connection is just pending. However, there is a
 //! specific workflow to follow to be in a given state.
 //!
 //! ```mermaid
@@ -50,6 +50,30 @@ pub enum EStatus {
 pub struct Status {
     inner: Arc<RwLock<(EStatus, Option<Url>)>>,
     cv: Arc<(Mutex<()>, Condvar)>,
+}
+
+#[cfg(test)]
+impl Status {
+    /// Test feature. Create a leader status.
+    pub fn leader() -> Status {
+        let inner = Arc::new(RwLock::new((EStatus::Leader, None)));
+        let cv = Arc::new((Mutex::new(()), Condvar::new()));
+        Status { inner, cv }
+    }
+
+    /// Test feature. Create a follower status.
+    pub fn follower(leader: Url) -> Status {
+        let inner = Arc::new(RwLock::new((EStatus::Follower, Some(leader))));
+        let cv = Arc::new((Mutex::new(()), Condvar::new()));
+        Status { inner, cv }
+    }
+
+    /// Test feature. Create a follower status.
+    pub fn candidate() -> Status {
+        let inner = Arc::new(RwLock::new((EStatus::Candidate, None)));
+        let cv = Arc::new((Mutex::new(()), Condvar::new()));
+        Status { inner, cv }
+    }
 }
 
 impl Status {
@@ -109,13 +133,14 @@ impl Status {
         Ok(())
     }
 
+    /// Create a connection pending status, which is the default status.
     pub fn connection_pending() -> Status {
         let inner = Arc::new(RwLock::new((EStatus::ConnectionPending, None)));
         let cv = Arc::new((Mutex::new(()), Condvar::new()));
         Status { inner, cv }
     }
 
-    pub async fn leader(&self) -> Option<Url> {
+    pub async fn get_leader(&self) -> Option<Url> {
         self.inner.read().await.1.clone()
     }
 
