@@ -64,6 +64,21 @@ impl Node {
 
         if input.prev_term.id == 1 {
             trace!("pre/append root term");
+
+			// We must have all terms from the prev_term and the term in the message.
+			if input.term.id > 1 {
+				let mut i = 1;
+				for entry in input.entries {
+					if entry.id != i + 1 {
+						return Ok(AppendTermResult {
+                        	current_term: self.logs.lock().await.current_term(),
+                            success: false,
+                        });
+					}
+					i = i + 1;
+				}
+			}
+
             if let Some(index) = self.hook.pre_append_term(&input.prev_term) {
                 if index < input.prev_term.id {
                     trace!("root term rejected by checks pre append term");
