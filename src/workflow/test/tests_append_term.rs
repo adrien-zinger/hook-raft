@@ -65,22 +65,22 @@ async fn tests_append_term() {
 
     let curr_term: Term = node.logs.lock().await.current_term();
 
-	// The node is a follower so it should have accepted the term
-	// and current term id is 1.
+    // The node is a follower so it should have accepted the term
+    // and current term id is 1.
     assert_eq!(curr_term.id, 1)
 }
 
 #[tokio::test]
 async fn case_one_false() {
-	/* ****
-	Test the first point of the official spec:
-	    1. Reply false if term < currentTerm (§5.1)
-	**** */
-	let leader_url = String::from("10.10.10.10:1212");
-	let node = get_simple_follower(leader_url.clone());
+    /* ****
+    Test the first point of the official spec:
+        1. Reply false if term < currentTerm (§5.1)
+    **** */
+    let leader_url = String::from("10.10.10.10:1212");
+    let node = get_simple_follower(leader_url.clone());
 
-	// Setup the node with some terms. Response should be ok.
-	let res1 = node
+    // Setup the node with some terms. Response should be ok.
+    let res1 = node
         .receive_append_term(AppendTermInput {
             term: Term::_new(3, "3rd term"),
             leader_id: leader_url.clone(),
@@ -91,26 +91,26 @@ async fn case_one_false() {
         .await
         .unwrap();
 
-	//assert_eq!(res1.current_term, 3);
-	assert!(res1.success);
+    //assert_eq!(res1.current_term, 3);
+    assert!(res1.success);
 }
 
 #[tokio::test]
 async fn case_one_false_setup_failure() {
-	/* ****
-	The `case_one_test` is initialized with some Terms, just
-	to tell that the initialization must be complete (all entries)
-	has to be sent. Make a scenario with a gap between term 1 an 3.
+    /* ****
+    The `case_one_test` is initialized with some Terms, just
+    to tell that the initialization must be complete (all entries)
+    has to be sent. Make a scenario with a gap between term 1 an 3.
 
-	Note that it's also related with the second point of the spec:
-		2. Reply false if log doesn’t contain an entry at prevLogIndex
+    Note that it's also related with the second point of the spec:
+        2. Reply false if log doesn’t contain an entry at prevLogIndex
            whose term matches prevLogTerm (§5.3)
-	**** */
+    **** */
 
-	let leader_url = String::from("10.10.10.10:1212");
-	let node = get_simple_follower(leader_url.clone());
+    let leader_url = String::from("10.10.10.10:1212");
+    let node = get_simple_follower(leader_url.clone());
 
-	let res1 = node
+    let res1 = node
         .receive_append_term(AppendTermInput {
             term: Term::_new(3, "3rd term"),
             leader_id: leader_url.clone(),
@@ -121,5 +121,5 @@ async fn case_one_false_setup_failure() {
         .await
         .unwrap();
 
-	assert!(!res1.success)
+    assert!(!res1.success)
 }

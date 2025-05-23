@@ -14,6 +14,15 @@ use crate::{
 };
 use tracing::{debug, trace, trace_span, warn};
 
+macro_rules! log {
+    ($($rest:tt)*) => {
+        #[cfg(not(test))]
+        trace!($($rest)*);
+        #[cfg(test)]
+        println!($($rest)*);
+    }
+}
+
 impl Node {
     /// Reception of a append_term request.
     ///
@@ -51,39 +60,22 @@ impl Node {
     /// min(leaderCommit, index of last new entry
     async fn internal_receive_append_term(
         &self,
-        input: AppendTermInput,
+        mut input: AppendTermInput,
     ) -> ErrorResult<AppendTermResult> {
+        input.entries.sort_by_key(|e| e.id);
+
         let checks = self.check_input(&input).await;
         if let Err(res) = checks {
-            trace!("request rejected by checks");
-            #[cfg(test)]
-            println!("rejected by checks");
+            log!("request rejected by checks");
             return Ok(res);
         }
         self.reset_timeout().await;
 
         if input.prev_term.id == 1 {
             trace!("pre/append root term");
-
-			// We must have all terms from the prev_term and the term in the message.
-			if input.term.id > 1 {
-				let mut i = 1;
-				for entry in input.entries {
-					if entry.id != i + 1 {
-						return Ok(AppendTermResult {
-                        	current_term: self.logs.lock().await.current_term(),
-                            success: false,
-                        });
-					}
-					i = i + 1;
-				}
-			}
-
             if let Some(index) = self.hook.pre_append_term(&input.prev_term) {
                 if index < input.prev_term.id {
-                    trace!("root term rejected by checks pre append term");
-                    #[cfg(test)]
-                    println!("root term rejected by checks pre append term");
+                    log!("root term rejected by checks pre append term");
                     return Ok(AppendTermResult {
                         current_term: self.logs.lock().await.current_term(),
                         success: false,
@@ -97,15 +89,11 @@ impl Node {
         } else {
             // Pre/Append entries (from prev term to term excluded)
             if !input.entries.is_empty() {
-                let mut entries = input.entries.iter().collect::<Vec<_>>();
-                // Sort entries from oldest to newest
-                entries.sort_by_key(|t| t.id);
-                for term in entries {
+                for term in &input.entries {
                     if term.id <= self.logs.lock().await.commit_index() {
                         // ignore committed term
                         continue;
                     }
-
                     // pre append term send the last index I don't have
                     // (the first missing term).
                     //
@@ -133,9 +121,7 @@ impl Node {
 
             if let Some(index) = self.hook.pre_append_term(&input.term) {
                 if index < input.term.id {
-                    trace!("term {} rejected by checks pre append term", index);
-                    #[cfg(test)]
-                    println!("term {} rejected by checks pre append term", index);
+                    log!("term {} rejected by checks pre append term", index);
                     return Ok(AppendTermResult {
                         current_term: self.logs.lock().await.current_term(),
                         success: false,
@@ -147,9 +133,7 @@ impl Node {
                 panic!("request rejected in pre append term");
             }
         }
-        trace!("request {} has passed checks", input.term.id);
-        #[cfg(test)]
-        println!("request {} has passed checks", input.term.id);
+        log!("request {} has passed checks", input.term.id);
 
         // Finally commit the entries up to leader_commit_index,
         // stopping at the latest entry we have in cache
@@ -177,9 +161,7 @@ impl Node {
         let mut logs_guard = self.logs.lock().await;
         let current_term = logs_guard.current_term();
         if input.term.id < current_term.id {
-            trace!("term id older than local state");
-            #[cfg(test)]
-            println!("term id older than local state");
+            log!("term id older than local state");
             return Err(AppendTermResult {
                 current_term,
                 success: false,
@@ -187,9 +169,44 @@ impl Node {
         }
 
         if input.leader_commit_index < logs_guard.commit_index() {
-            trace!("leader commit index invalid");
-            #[cfg(test)]
-            println!("leader commit index invalid");
+            log!("leader commit index invalid");
+            return Err(AppendTermResult {
+                current_term,
+                success: false,
+            });
+        }
+
+        // We need the message to have all the entries between `term`
+        // and `prev_term`.
+        if input.prev_term.id > input.term.id {
+            return Err(AppendTermResult {
+                current_term,
+                success: false,
+            });
+        }
+        if input.term.id == input.prev_term.id && input.entries.is_empty()
+            || input.entries.len() == input.term.id - input.prev_term.id - 1
+        {
+            // Input entries contains a correct number of terms. Now
+            // we check if terms ids are monotones.
+            let ids = input.prev_term.id + 1..=input.term.id;
+            for (e, expected_id) in input.entries.iter().zip(ids) {
+                if e.id != expected_id {
+                    log!("entry missing, jump from {} to {}", e.id, expected_id);
+                    return Err(AppendTermResult {
+                        current_term,
+                        success: false,
+                    });
+                }
+            }
+        } else {
+            log!(
+                "entries received are len {}, and we expected {} - {} = {}",
+                input.entries.len(),
+                input.term.id,
+                input.prev_term.id,
+                input.term.id - input.prev_term.id
+            );
             return Err(AppendTermResult {
                 current_term,
                 success: false,
